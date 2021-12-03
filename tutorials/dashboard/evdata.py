@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-This module provides data for EV Cahrging Dashboard
+This module provides data for the EV Charging Dashboard.
 """
 
 from here.platform import Platform
@@ -184,9 +184,9 @@ class TrafficMessage:
     CATALOG_HRN_RIB = 'hrn:here:data::olp-here:rib-2'
     LAYER_ID_TRAFFIC = 'traffic-flow'
     LAYER_ID_GEOMETRY = 'topology-geometry'
-    TRAFFIC_FIELDS = ['items.topology_segment.topology_segment_id', 'items.topology_segment.start_offset',
-                      'items.topology_segment.end_offset']
-    GEO_FIELDS = ['node.segment_ref.identifier', 'node.geometry']
+    TRAFFIC_FIELDS = ['topology_segment.topology_segment_id', 'topology_segment.start_offset',
+                      'topology_segment.end_offset']
+    GEO_FIELDS = ['segment_ref.identifier', 'geometry']
     GEO_VERSION_NO = 1831
 
     def __init__(self):
@@ -198,12 +198,19 @@ class TrafficMessage:
         self.data = None
 
     def _get_data(self, tile_ids, x1, y1, x2, y2):
-        traffic_df = self.layer_traffic.read_partitions(tile_ids, decode=True, paths=TrafficMessage.TRAFFIC_FIELDS)
+        traffic_df = self.layer_traffic.read_partitions(tile_ids,record_path="items", 
+                                                        columns=TrafficMessage.TRAFFIC_FIELDS)
+        traffic_df = traffic_df.explode("topology_segment.topology_segment_id")
+        traffic_df.columns = ['partition_id','topology_segment_id', 'start_offset','end_offset']
         traffic_df['topology_segment_id'] = 'here:cm:segment:' + traffic_df['topology_segment_id'].astype(str)
-        geo_df = self.layer_geo.read_partitions(tile_ids, TrafficMessage.GEO_VERSION_NO, decode=True,
-                                                paths=TrafficMessage.GEO_FIELDS)
+        geo_df = self.layer_geo.read_partitions(tile_ids, record_path='node')
+        geo_df_expl = geo_df[["partition_id", "segment_ref", "geometry.latitude", "geometry.longitude"]].explode("segment_ref")
+        geo_df_expl['identifier'] = geo_df_expl['segment_ref'].apply(lambda x: x.get('identifier'))
+        df_expl = geo_df_expl.drop(columns=['segment_ref'])
+        geo_df_rib  = geopandas.GeoDataFrame(df_expl, geometry=geopandas.points_from_xy(df_expl['geometry.longitude'], 
+                                          df_expl['geometry.latitude']))
         # merge these two data frames
-        merged_df = traffic_df.merge(geo_df, left_on=['partition_id',
+        merged_df = traffic_df.merge(geo_df_rib, left_on=['partition_id',
                                                       'topology_segment_id'],
                                      how='inner', right_on=['partition_id', 'identifier'])
         # drop columns not required
